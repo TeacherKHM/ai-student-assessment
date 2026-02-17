@@ -1,44 +1,52 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import axios from "axios";
 
-const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const apiKey = process.env.GEMINI_API_KEY;
+if (!apiKey) {
+    console.warn("WARNING: GEMINI_API_KEY is not defined in environment variables. Gemini AI features will likely fail.");
+}
+
+const genAI = new GoogleGenerativeAI(apiKey || "");
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
 /**
  * Performs OCR using Mathpix API (for math/physics handwritten work).
  */
 export async function performMathpixOCR(imageUrl: string) {
-    try {
-        const response = await axios.post(
-            "https://api.mathpix.com/v3/text",
-            {
-                src: imageUrl,
-                formats: ["text", "data", "latex_styled"],
-                data_options: {
-                    include_latex: true,
-                },
-            },
-            {
-                headers: {
-                    app_id: process.env.MATHPIX_APP_ID,
-                    app_key: process.env.MATHPIX_APP_KEY,
-                    "Content-Type": "application/json",
-                },
-            }
-        );
-        return response.data;
-    } catch (error) {
-        console.error("Mathpix OCR Error:", error);
-        return null;
-    }
+  try {
+    const response = await axios.post(
+      "https://api.mathpix.com/v3/text",
+      {
+        src: imageUrl,
+        formats: ["text", "data", "latex_styled"],
+        data_options: {
+          include_latex: true,
+        },
+      },
+      {
+        headers: {
+          app_id: process.env.MATHPIX_APP_ID,
+          app_key: process.env.MATHPIX_APP_KEY,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+    return response.data;
+  } catch (error) {
+    console.error("Mathpix OCR Error:", error);
+    return null;
+  }
 }
 
 /**
- * analyzes student work using Claude Sonnet.
+ * analyzes student work using Gemini.
  */
-export async function analyzeStudentWork(ocrResult: string, gradeLevel: string, topic: string) {
-    const prompt = `
+export async function analyzeStudentWork(
+  ocrResult: string,
+  gradeLevel: string,
+  topic: string,
+) {
+  const prompt = `
     You are an expert math and physics teacher with 30 years of experience. 
     Analyze the following OCR transcription of a student's handwritten work for a ${gradeLevel} ${topic} problem.
 
@@ -72,14 +80,26 @@ export async function analyzeStudentWork(ocrResult: string, gradeLevel: string, 
     }
   `;
 
-    const message = await anthropic.messages.create({
-        model: "claude-3-5-sonnet-20240620",
-        max_tokens: 1500,
-        messages: [{ role: "user", content: prompt }],
-    });
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
 
     // Extract JSON from response (handling potential markdown wrapping)
-    const content = message.content[0].type === 'text' ? message.content[0].text : '';
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error("No JSON found in Gemini response:", text);
+      return null;
+    }
+
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch (parseError) {
+      console.error("Error parsing Gemini JSON:", parseError, "Content:", jsonMatch[0]);
+      return null;
+    }
+  } catch (error) {
+    console.error("Gemini AI Analysis Error:", error);
+    return null;
+  }
 }
